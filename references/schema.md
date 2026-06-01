@@ -7,11 +7,11 @@ Read this when `search()`, `context()`, or `sql()` are not enough.
 
 ## 1. Database Schema
 
-Database location: `~/.claude/obelisk.sqlite`
+Database location: `~/.claude/obelisk.sqlite`. The same database indexes Claude Code history from `~/.claude/projects` and Codex history from `~/.codex/sessions`.
 
 ### sessions
 
-One row per Claude Code session.
+One row per Claude Code or Codex session.
 
 ```sql
 CREATE TABLE sessions (
@@ -24,13 +24,16 @@ CREATE TABLE sessions (
   git_branch    TEXT,               -- git branch active during session (if any)
   version       TEXT,               -- Claude Code version string
   message_count INTEGER DEFAULT 0,  -- total user + assistant messages
-  jsonl_path    TEXT                -- absolute path to source JSONL file
+  jsonl_path    TEXT,               -- absolute path to source JSONL file
+  source        TEXT DEFAULT 'claude' -- "claude" or "codex"
 );
 ```
 
+For Codex rows, `project` and `project_path` are set to the session `cwd` from `session_meta.payload.cwd`, and `version` is set to `session_meta.payload.cli_version`.
+
 ### messages
 
-Every user and assistant message. Core table for all queries.
+Every user and assistant message. Core table for all queries. Codex function calls and function call outputs are also inserted as searchable pseudo-messages with `type` values `codex_function_call` and `codex_function_call_output`.
 
 ```sql
 CREATE TABLE messages (
@@ -39,7 +42,7 @@ CREATE TABLE messages (
   type          TEXT,               -- "user" or "assistant"
   parent_uuid   TEXT,               -- UUID of parent message (conversation tree)
   timestamp     TEXT,               -- ISO 8601
-  role          TEXT,               -- "user" or "assistant" (from message payload)
+  role          TEXT,               -- "user", "assistant", or "tool" (from message payload)
   text          TEXT,               -- extracted text content (thinking + text blocks, truncated to 10k chars)
   model         TEXT,               -- model name (e.g. "claude-opus-4-6-20250529"), NULL for user messages
   is_sidechain  INTEGER DEFAULT 0,  -- 1 if this message is on a sidechain (retry/branch)
@@ -69,7 +72,7 @@ Queried via `MATCH` syntax. Rebuilt on each index pass.
 
 ### tool_calls
 
-Every tool invocation by the assistant. One row per `tool_use` content block.
+Every tool invocation by the assistant. One row per Claude `tool_use` content block or Codex `function_call` response item.
 
 ```sql
 CREATE TABLE tool_calls (
@@ -197,6 +200,7 @@ Full-text search across all message text using FTS5.
 | `opts.limit` | `number` | Max results (default 20) |
 | `opts.sessionId` | `string` | Restrict to one session |
 | `opts.project` | `string` | Restrict to a project slug |
+| `opts.source` | `string` | Restrict to `claude` or `codex` |
 | `opts.after` | `string` | ISO 8601 lower bound on timestamp |
 | `opts.before` | `string` | ISO 8601 upper bound on timestamp |
 
@@ -461,12 +465,23 @@ return details;
 
 ```js
 const rows = sql(`
-  SELECT id, title, started_at, ended_at, message_count, git_branch
+  SELECT id, title, source, started_at, ended_at, message_count, git_branch
   FROM sessions
   WHERE project_path = ?
   ORDER BY started_at DESC
 `, '/Users/tomiya/Code/quiet-zero');
 return rows;
+```
+
+For Codex sessions, use the exact `cwd` as `project_path`:
+
+```js
+const hits = search('rollout-inference git conflict', { source: 'codex', limit: 10 });
+return hits.map(h => ({
+  session: h.session.id,
+  cwd: h.session.project_path,
+  text: h.message.text?.slice(0, 200),
+}));
 ```
 
 ### Reconstruct what happened in a session

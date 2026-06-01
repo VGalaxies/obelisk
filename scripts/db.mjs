@@ -6,6 +6,7 @@ const os = require('node:os');
 const { DatabaseSync } = require('node:sqlite');
 
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
+const CODEX_DIR = path.join(os.homedir(), '.codex');
 const DB_PATH = path.join(CLAUDE_DIR, 'obelisk.sqlite');
 const TEXT_LIMIT = 10000;
 
@@ -13,7 +14,7 @@ const SCHEMA = `
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY, title TEXT, project TEXT, project_path TEXT,
   started_at TEXT, ended_at TEXT, git_branch TEXT, version TEXT,
-  message_count INTEGER DEFAULT 0, jsonl_path TEXT);
+  message_count INTEGER DEFAULT 0, jsonl_path TEXT, source TEXT DEFAULT 'claude');
 CREATE TABLE IF NOT EXISTS messages (
   uuid TEXT PRIMARY KEY, session_id TEXT, type TEXT, parent_uuid TEXT,
   timestamp TEXT, role TEXT, text TEXT, model TEXT,
@@ -53,7 +54,15 @@ function openDb() {
   db.exec('PRAGMA journal_mode=WAL');
   db.exec('PRAGMA synchronous=NORMAL');
   db.exec(SCHEMA);
+  ensureColumn(db, 'sessions', 'source', "TEXT DEFAULT 'claude'");
   return db;
+}
+
+function ensureColumn(db, table, column, definition) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (!cols.some((c) => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
 }
 
 function trunc(s) {
@@ -80,15 +89,29 @@ function extractText(content) {
   if (!Array.isArray(content)) return null;
   const parts = [];
   for (const b of content) {
-    if (b.type === 'text' && b.text) parts.push(b.text);
-    else if (b.type === 'thinking' && b.thinking) parts.push(b.thinking);
+    if (b.type === 'text' && b.text) parts.push(textValue(b.text));
+    else if (b.type === 'input_text' && b.text) parts.push(textValue(b.text));
+    else if (b.type === 'output_text' && b.text) parts.push(textValue(b.text));
+    else if (b.type === 'thinking' && b.thinking) parts.push(textValue(b.thinking));
+    else if (b.type === 'reasoning_text' && b.text) parts.push(textValue(b.text));
   }
   return parts.length ? trunc(parts.join('\n')) : null;
 }
 
+function textValue(value) {
+  return typeof value === 'string' ? value : JSON.stringify(value);
+}
+
 function filePath(name, input) {
   if (!input) return null;
-  return ['Read', 'Edit', 'Write', 'NotebookEdit'].includes(name) ? (input.file_path || null) : null;
+  if (['Read', 'Edit', 'Write', 'NotebookEdit'].includes(name)) return input.file_path || null;
+  if (['view_image'].includes(name)) return input.path || null;
+  if (name === 'apply_patch') {
+    const patch = typeof input === 'string' ? input : (input.patch || input.input || '');
+    const match = patch.match(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/m);
+    return match ? match[1] : null;
+  }
+  return input.file_path || input.path || null;
 }
 
 function isDir(p) { try { return fs.statSync(p).isDirectory(); } catch { return false; } }
@@ -114,4 +137,4 @@ function readLines(filePath, callback) {
   }
 }
 
-export { CLAUDE_DIR, DB_PATH, TEXT_LIMIT, openDb, trunc, truncJson, extractText, filePath, isDir, readLines, fs, path, os };
+export { CLAUDE_DIR, CODEX_DIR, DB_PATH, TEXT_LIMIT, openDb, trunc, truncJson, extractText, filePath, isDir, readLines, fs, path, os };

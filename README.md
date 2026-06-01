@@ -53,7 +53,7 @@ You don't manage history. You ask questions about past work.
 /obelisk 我之前有没有试过这个方案，结果为什么放弃了
 ```
 
-Anything Claude Code has done before -- sessions, tool calls, subagents, workflows -- becomes structured, queryable memory. Ask in your own words.
+Anything Claude Code or Codex has done before -- sessions, tool calls, subagents, workflows, and Codex JSONL turns -- becomes structured, queryable memory. Ask in your own words.
 
 ## Install
 
@@ -75,6 +75,8 @@ First run builds the index (~5 seconds for 100 sessions). After that it rebuilds
 
 - Node.js 22+ (uses built-in node:sqlite with FTS5)
 - Claude Code with skills support.
+
+If the host default `node` is older than 22, use `npx --yes node@22 scripts/runtime.mjs ...` or switch your shell to a Node 22 runtime before invoking Obelisk.
 
 ## How it works
 
@@ -112,14 +114,15 @@ The design is progressive disclosure: the agent doesn't see the full schema unti
 
 | Layer | Source | What's captured |
 |-------|--------|----------------|
-| **Sessions** | `<project>/<sessionId>.jsonl` | Title, project, timestamps, git branch |
+| **Claude sessions** | `<project>/<sessionId>.jsonl` | Title, project, timestamps, git branch |
+| **Codex sessions** | `~/.codex/sessions/**/*.jsonl` | Session id, cwd, timestamps, originator/runtime version |
 | **Messages** | user + assistant turns | Full text, model, token usage, parent chain |
-| **Tool calls** | every tool invocation | Tool name, input, file paths touched |
+| **Tool calls** | every tool invocation | Tool name, input, file paths touched; Codex function calls and outputs are indexed as searchable pseudo-messages |
 | **Subagents** | `subagents/agent-<id>.jsonl` | Agent type, description, full conversation |
 | **Workflows** | `workflows/wf_<runId>.json` | Script, structured result, agent count |
 | **Workflow agents** | `subagents/workflows/wf_<runId>/` | Per-agent transcripts linked to workflow |
 
-Full-text search via FTS5 covers message text across every layer, while the SQLite tables preserve the structure agents need for investigation.
+Full-text search via FTS5 covers message text across every layer, while the SQLite tables preserve the structure agents need for investigation. Use `sessions.source` to distinguish `claude` from `codex`; Codex rows use their `cwd` as `sessions.project` and `sessions.project_path`.
 
 ## Structure
 
@@ -134,7 +137,7 @@ Full-text search via FTS5 covers message text across every layer, while the SQLi
 
 ## Implementation Notes
 
-The index rebuilds incrementally — only new or modified JSONL files are re-parsed.
+The index rebuilds incrementally -- only new or modified JSONL files are re-parsed. Claude history is read from `~/.claude/projects`; Codex history is read from `~/.codex/sessions`.
 
 Zero npm dependencies. Uses Node 22's built-in node:sqlite with FTS5. The entire runtime is ~400 lines.
 
@@ -145,4 +148,3 @@ Zero npm dependencies. Uses Node 22's built-in node:sqlite with FTS5. The entire
 ## License
 
 MIT @tommy0103
-

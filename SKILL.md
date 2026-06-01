@@ -12,8 +12,8 @@ allowed-tools:
 
 # obelisk
 
-Searches and queries your Claude Code session history stored in `~/.claude/`.
-A SQLite index with FTS5 full-text search covers all sessions, subagent conversations, and workflow agent runs.
+Searches and queries your Claude Code session history stored in `~/.claude/` and Codex session history stored in `~/.codex/sessions/`.
+A SQLite index with FTS5 full-text search covers Claude sessions, Claude subagent conversations, workflow agent runs, and Codex JSONL turns/tool calls.
 You write JS query snippets that run in a sandboxed VM against the indexed data, then parse the JSON output.
 
 ## Quick Start
@@ -26,10 +26,16 @@ The base directory for this skill is provided as `$SKILL_DIR` at invocation time
 node $SKILL_DIR/scripts/runtime.mjs --search "keyword"
 ```
 
+If the host default `node` is older than 22 and fails on `node:sqlite`, run the same command through Node 22:
+
+```bash
+npx --yes node@22 $SKILL_DIR/scripts/runtime.mjs --search "keyword"
+```
+
 **Custom query** (write a JS snippet, run it):
 
 1. Write a query to a temp file (e.g. `/tmp/q.mjs`)
-2. Run: `node $SKILL_DIR/scripts/runtime.mjs --query /tmp/q.mjs`
+2. Run: `node $SKILL_DIR/scripts/runtime.mjs --query /tmp/q.mjs` (or `npx --yes node@22 ...` when default `node` is older than 22)
 3. Parse the JSON stdout and answer the user
 
 The query file body is executed inside `(async () => { ... })()` with the API below available as globals. The last expression is returned as JSON. Use `return` to emit results.
@@ -42,7 +48,7 @@ Full-text search across all messages (user, assistant, subagent, workflow agent)
 
 Returns: `[{ message: {uuid, text, role, timestamp, model}, session: {id, title, project, started_at}, context: [...surrounding messages] }]`
 
-opts: `{ limit, sessionId, project, after, before }`
+opts: `{ limit, sessionId, project, source, after, before }`
 
 ### context(uuid)
 
@@ -153,6 +159,7 @@ return context(hits[0].message.uuid)
 
 - First run builds the index (~5s for ~100 sessions). Subsequent runs are incremental.
 - DB location: `~/.claude/obelisk.sqlite`
+- Codex sessions are indexed into the same database with `sessions.source = "codex"` and `sessions.project` / `sessions.project_path` set to the Codex `cwd`.
 - Subagent and workflow agent conversations are fully indexed and searchable.
 - Query scripts run in a sandboxed VM context -- no file system or network access from inside scripts.
 - Text is truncated to 10k chars per message during indexing.

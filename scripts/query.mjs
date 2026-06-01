@@ -6,26 +6,35 @@ function createQueryApi(db) {
   const q = (sql, ...p) => db.prepare(sql).all(...p);
 
   const search = (text, opts = {}) => {
-    const { limit = 20, sessionId, project, after, before } = opts;
+    const { limit = 20, sessionId, project, source, after, before } = opts;
     let where = 'WHERE mf.text MATCH ?';
     const p = [text];
     if (sessionId) { where += ' AND mf.session_id=?'; p.push(sessionId); }
     if (project)   { where += ' AND s.project=?';     p.push(project); }
+    if (source)    { where += ' AND s.source=?';      p.push(source); }
     if (after)     { where += ' AND m.timestamp>?';    p.push(after); }
     if (before)    { where += ' AND m.timestamp<?';    p.push(before); }
     p.push(limit);
-    const rows = db.prepare(`
+    let rows;
+    const stmt = db.prepare(`
       SELECT m.uuid,m.session_id,m.text,m.role,m.timestamp,m.model,
-             s.id as s_id,s.title as s_title,s.project as s_project,s.started_at as s_started
+             s.id as s_id,s.title as s_title,s.project as s_project,s.project_path as s_project_path,
+             s.started_at as s_started,s.source as s_source
       FROM messages_fts mf JOIN messages m ON m.uuid=mf.uuid LEFT JOIN sessions s ON s.id=m.session_id
-      ${where} ORDER BY rank LIMIT ?`).all(...p);
+      ${where} ORDER BY rank LIMIT ?`);
+    try {
+      rows = stmt.all(...p);
+    } catch (e) {
+      p[0] = safeFtsQuery(text);
+      rows = stmt.all(...p);
+    }
     return rows.map(r => {
       const ctx = db.prepare(
         'SELECT uuid,text,role,timestamp,model FROM messages WHERE session_id=? AND uuid!=? ORDER BY ABS(JULIANDAY(timestamp)-JULIANDAY(?)) LIMIT 6'
       ).all(r.session_id, r.uuid, r.timestamp).sort((a,b) => a.timestamp < b.timestamp ? -1 : 1);
       return {
         message: { uuid: r.uuid, text: r.text, role: r.role, timestamp: r.timestamp, model: r.model },
-        session: { id: r.s_id, title: r.s_title, project: r.s_project, started_at: r.s_started },
+        session: { id: r.s_id, title: r.s_title, project: r.s_project, project_path: r.s_project_path, source: r.s_source, started_at: r.s_started },
         context: ctx,
       };
     });
@@ -127,6 +136,17 @@ function createQueryApi(db) {
 
   const findRawLine = (jsonlPath, uuid) => {
     if (!jsonlPath || !fs.existsSync(jsonlPath)) return null;
+    const codexLine = uuid.match(/^codex:.+:l(\d+)$/);
+    if (codexLine) {
+      const target = Number(codexLine[1]);
+      let lineNum = 0;
+      let found = null;
+      readLines(jsonlPath, (line) => {
+        lineNum++;
+        if (lineNum === target) { found = line; return false; }
+      });
+      return found;
+    }
     let found = null;
     readLines(jsonlPath, (line) => {
       if (!line.includes(uuid)) return;
@@ -150,6 +170,14 @@ function createQueryApi(db) {
   };
 
   return { sql: q, search, context, trace, thread, subagents, workflows, workflowTree, fileHistory, failures, recent, raw };
+}
+
+function safeFtsQuery(text) {
+  return String(text)
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((token) => /^[A-Za-z0-9_]+$/.test(token) ? token : `"${token.replace(/"/g, '""')}"`)
+    .join(' ');
 }
 
 export { createQueryApi };
